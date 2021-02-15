@@ -8,7 +8,7 @@ use gtk::{Application, ApplicationWindow, Button};
 
 use std::env;
 use std::io::Read;
-use std::fs::File;
+use std::{thread, time};
 
 /// Opcodes determined by the lexer
 #[derive(Debug)]
@@ -116,22 +116,35 @@ fn parse(opcodes: Vec<OpCode>) -> Vec<Instruction> {
 }
 
 /// Executes a program that was previously parsed
-fn run(instructions: &Vec<Instruction>, tape: &mut Vec<u8>, data_pointer: &mut usize) {
+fn run(instructions: &Vec<Instruction>, tape: &mut Vec<u8>, data_pointer: &mut usize, text_buffer: &mut gtk::TextBuffer) {
     for instr in instructions {
+        while gtk::events_pending(){
+            gtk::main_iteration();
+        }
         match instr {
             Instruction::IncrementPointer => *data_pointer += 1,
             Instruction::DecrementPointer => *data_pointer -= 1,
             Instruction::Increment => tape[*data_pointer] += 1,
             Instruction::Decrement => tape[*data_pointer] -= 1,
-            Instruction::Write => print!("{}", tape[*data_pointer] as char),
+            Instruction::Write => {
+                thread::sleep(time::Duration::from_millis(100));
+                let mut tmp = text_buffer.get_text(&text_buffer.get_start_iter(), &text_buffer.get_end_iter(), false);
+                let mut output = String::from(tmp.unwrap().as_str());
+                output.push(tape[*data_pointer] as char);
+                text_buffer.set_text(output.as_str());
+            },
+
+            //FIX THIS ------------------------------------------------------------------------------------------------------------------------------//
             Instruction::Read => {
+                todo!();
                 let mut input: [u8; 1] = [0; 1];
                 std::io::stdin().read_exact(&mut input).expect("failed to read stdin");
                 tape[*data_pointer] = input[0];
             },
+            //---------------------------------------------------------------------------------------------------------------------------------------//
             Instruction::Loop(nested_instructions) => {
                 while tape[*data_pointer] != 0 {
-                    run(&nested_instructions, tape, data_pointer)
+                    run(&nested_instructions, tape, data_pointer, text_buffer)
                 }
             }
         }
@@ -160,31 +173,30 @@ fn main() {
         marker[i] = builder.get_object(("lblMarker".to_owned() + i.to_string().as_str()).as_str()).unwrap();
     }
 
-    for i in 0..32 {
-        tape[i].set_text(i.to_string().as_str());
-        marker[i].set_text(i.to_string().as_str());
-    }
-
     window.set_title("Brainfuck Visualizer");
 
     window.show_all();
+
+
     
+    start_button.connect_clicked(move |_| {
+        let mut buf: gtk::TextBuffer = output.get_buffer().unwrap();
+        output.set_buffer(Some(&buf));
+        let sourceBuffer = input.get_buffer().unwrap();
+        let source = sourceBuffer.get_text(&sourceBuffer.get_start_iter(), &sourceBuffer.get_end_iter(), false);
+        let opcodes = lex(String::from(source.as_ref().unwrap().as_str()));
+        let program = parse(opcodes);
+        let mut tape: Vec<u8> = vec![0; 32];
+        let mut data_pointer = 0;
+
+
+        run(&program, &mut tape, &mut data_pointer, &mut buf);
+        
+
+    });
+
+
     gtk::main();
-
-    // // Determine which file to execute
-    // let args: Vec<String> = env::args().collect();
-
-    // if args.len() != 2 {
-    //     println!("usage: bf <file.bf>");
-    //     std::process::exit(1);
-    // }
-    
-    // let filename = &args[1];
-
-    // // Read file
-    // let mut file = File::open(filename).expect("program file not found");
-    // let mut source = String::new();
-    // file.read_to_string(&mut source).expect("failed to read program file");
 
     // // Lex file into opcodes
     // let opcodes = lex(source);
@@ -193,8 +205,8 @@ fn main() {
     // let program = parse(opcodes);
 
     // // Set up environment and run program
-    // let mut tape: Vec<u8> = vec![0; 32];
-    // let mut data_pointer = 32;
+    // let mut tape: Vec<u8> = vec![0; 1024];
+    // let mut data_pointer = 512;
 
     // run(&program, &mut tape, &mut data_pointer);
 }
