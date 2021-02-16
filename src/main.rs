@@ -9,7 +9,7 @@ use gtk::{Application, ApplicationWindow, Button};
 
 use std::env;
 use std::io::Read;
-use std::sync::*;
+use std::sync::mpsc;
 use std::{thread, time};
 
 /// Opcodes determined by the lexer
@@ -36,6 +36,21 @@ enum Instruction {
     Write,
     Read,
     Loop(Vec<Instruction>)
+}
+
+#[derive(Debug)]
+#[derive(Clone)]
+enum Action {
+    Output,
+    Tape
+}
+
+#[derive(Debug)]
+#[derive(Clone)]
+struct cellChange{
+    index: usize,
+    content: u8,
+    action: Action
 }
 
 /// Lexer turns the source code into a sequence of opcodes
@@ -118,25 +133,38 @@ fn parse(opcodes: Vec<OpCode>) -> Vec<Instruction> {
 }
 
 /// Executes a program that was previously parsed
-fn run(instructions: &Vec<Instruction>, tape: &mut Vec<u8>, data_pointer: &mut usize, tx: std::sync::mpsc::Sender<char>) {
+fn run(instructions: &Vec<Instruction>, tape: &mut Vec<u8>, data_pointer: &mut usize, sendOut: std::sync::mpsc::Sender<char>, sendCell: std::sync::mpsc::Sender<cellChange>) {
     for instr in instructions {
-
+        thread::sleep(time::Duration::from_millis(10));
         match instr {
-            Instruction::IncrementPointer => *data_pointer += 1,
-            Instruction::DecrementPointer => *data_pointer -= 1,
-            Instruction::Increment => tape[*data_pointer] += 1,
-            Instruction::Decrement => tape[*data_pointer] -= 1,
+            Instruction::IncrementPointer => {
+                println!("increment pointer");
+                *data_pointer += 1;
+                sendCell.send(cellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Tape});
+            },
+            Instruction::DecrementPointer => {
+                println!("decrement pointer");
+                *data_pointer -= 1;
+                sendCell.send(cellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Tape});
+            },
+            Instruction::Increment => {
+                println!("increment data");
+                tape[*data_pointer] += 1;
+                sendCell.send(cellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Tape});
+            },
+            Instruction::Decrement => {
+                println!("decrement data");
+                tape[*data_pointer] -= 1;
+                sendCell.send(cellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Tape});
+            },
             Instruction::Write => {
-                thread::sleep(time::Duration::from_millis(100));
-                tx.send(tape[*data_pointer] as char);
-                // let mut tmp = text_buffer.get_text(&text_buffer.get_start_iter(), &text_buffer.get_end_iter(), false);
-                // let mut output = String::from(tmp.unwrap().as_str());
-                // output.push(tape[*data_pointer] as char);
-                // text_buffer.set_text(output.as_str());
+                println!("write");
+                sendCell.send(cellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Output});
             },
 
             //FIX THIS ------------------------------------------------------------------------------------------------------------------------------//
             Instruction::Read => {
+                println!("read");
                 todo!();
                 let mut input: [u8; 1] = [0; 1];
                 std::io::stdin().read_exact(&mut input).expect("failed to read stdin");
@@ -145,7 +173,7 @@ fn run(instructions: &Vec<Instruction>, tape: &mut Vec<u8>, data_pointer: &mut u
             //---------------------------------------------------------------------------------------------------------------------------------------//
             Instruction::Loop(nested_instructions) => {
                 while tape[*data_pointer] != 0 {
-                    run(&nested_instructions, tape, data_pointer, tx.clone())
+                    run(&nested_instructions, tape, data_pointer, sendOut.clone(), sendCell.clone())
                 }
             }
         }
@@ -167,11 +195,11 @@ fn main() {
     let mut speed_slider: gtk::Scale = builder.get_object("sliderSpeed").unwrap();
     let mut input: gtk::TextView = builder.get_object("txtInput").unwrap();
     let mut output: gtk::TextView = builder.get_object("txtOutput").unwrap();
-    let mut tape: Vec<gtk::Label> = vec![gtk::Label::new(None); 32];
-    let mut marker: Vec<gtk::Label> = vec![gtk::Label::new(None); 32];
+    let mut tape_lbls: Vec<gtk::Label> = vec![gtk::Label::new(None); 32];
+    let mut marker_lbls: Vec<gtk::Label> = vec![gtk::Label::new(None); 32];
     for i in 0..32 {
-        tape[i] = builder.get_object(("lbl".to_owned() + i.to_string().as_str()).as_str()).unwrap();
-        marker[i] = builder.get_object(("lblMarker".to_owned() + i.to_string().as_str()).as_str()).unwrap();
+        tape_lbls[i] = builder.get_object(("lbl".to_owned() + i.to_string().as_str()).as_str()).unwrap();
+        marker_lbls[i] = builder.get_object(("lblMarker".to_owned() + i.to_string().as_str()).as_str()).unwrap();
     }
 
     window.set_title("Brainfuck Visualizer");
@@ -180,7 +208,13 @@ fn main() {
 
     
     start_button.connect_clicked(move |_| {
+        for i in 0..32 {
+            tape_lbls[i].set_text("0");
+            marker_lbls[i].set_text("");
+        }
+
         let mut buf: gtk::TextBuffer = output.get_buffer().unwrap();
+        buf.set_text("");
         output.set_buffer(Some(&buf));
         let sourceBuffer = input.get_buffer().unwrap();
         let source = sourceBuffer.get_text(&sourceBuffer.get_start_iter(), &sourceBuffer.get_end_iter(), false);
@@ -189,21 +223,49 @@ fn main() {
         let mut tape: Vec<u8> = vec![0; 32];
         let mut data_pointer = 0;
 
-        let (tx, rx) = mpsc::channel();
+        let (sendOut, recieveOut) = mpsc::channel();
+        let (sendCell, recieveCell) = mpsc::channel();
 
         let interpreter = thread::spawn(move || {
 
-            run(&program, &mut tape, &mut data_pointer, tx);
+            run(&program, &mut tape, &mut data_pointer, sendOut, sendCell);
             
         });
         loop { 
-            let received = rx.recv();
-            match received{
-                Ok(_) =>{
+            let received = recieveCell.recv();
+            // let receivedOut = recieveOut.recv();
+            // match receivedOut{
+            //     Ok(_) =>{
+            //         let mut tmp = buf.get_text(&buf.get_start_iter(), &buf.get_end_iter(), false);
+            //         let mut output = String::from(tmp.unwrap().as_str());
+            //         output.push(receivedOut.unwrap());
+            //         buf.set_text(output.as_str());
+            //         while gtk::events_pending(){
+            //             gtk::main_iteration();
+            //         }
+            //     },
+            //     Err(_) => {
+            //         println!("{:?}", receivedOut);
+            //         break;
+            //     }
+            // }
+            match received.clone(){
+                Ok(cellChange{index: _, content: _, action: Action::Output}) => {
                     let mut tmp = buf.get_text(&buf.get_start_iter(), &buf.get_end_iter(), false);
                     let mut output = String::from(tmp.unwrap().as_str());
-                    output.push(received.unwrap());
+                    output.push(received.unwrap().content as char);
                     buf.set_text(output.as_str());
+                    while gtk::events_pending(){
+                        gtk::main_iteration();
+                    }
+                }
+                Ok(_) =>{
+                    for i in 0..32 {
+                        marker_lbls[i].set_text("");
+                    }
+                    marker_lbls[received.clone().unwrap().index].set_text("#");
+                    let tmp = received.clone().unwrap().content.to_string();
+                    tape_lbls[received.unwrap().index].set_text(&tmp[..]);
                     while gtk::events_pending(){
                         gtk::main_iteration();
                     }
@@ -214,13 +276,14 @@ fn main() {
                 }
             }       
         }
+
+        pause_button.connect_clicked(move |_| {
+
+
+        });
+    
     });
 
-    pause_button.connect_clicked(move |_| {
-
-        
-
-    });
 
 
 
