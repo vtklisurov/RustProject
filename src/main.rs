@@ -47,7 +47,7 @@ enum Action {
 
 #[derive(Debug)]
 #[derive(Clone)]
-struct cellChange{
+struct CellChange{
     index: usize,
     content: u8,
     action: Action
@@ -133,33 +133,33 @@ fn parse(opcodes: Vec<OpCode>) -> Vec<Instruction> {
 }
 
 /// Executes a program that was previously parsed
-fn run(instructions: &Vec<Instruction>, tape: &mut Vec<u8>, data_pointer: &mut usize, sendOut: std::sync::mpsc::Sender<char>, sendCell: std::sync::mpsc::Sender<cellChange>) {
+fn run(instructions: &Vec<Instruction>, tape: &mut Vec<u8>, data_pointer: &mut usize, send_cell: std::sync::mpsc::Sender<CellChange>) {
     for instr in instructions {
         thread::sleep(time::Duration::from_millis(10));
         match instr {
             Instruction::IncrementPointer => {
                 println!("increment pointer");
                 *data_pointer += 1;
-                sendCell.send(cellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Tape});
+                send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Tape});
             },
             Instruction::DecrementPointer => {
                 println!("decrement pointer");
                 *data_pointer -= 1;
-                sendCell.send(cellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Tape});
+                send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Tape});
             },
             Instruction::Increment => {
                 println!("increment data");
                 tape[*data_pointer] += 1;
-                sendCell.send(cellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Tape});
+                send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Tape});
             },
             Instruction::Decrement => {
                 println!("decrement data");
                 tape[*data_pointer] -= 1;
-                sendCell.send(cellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Tape});
+                send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Tape});
             },
             Instruction::Write => {
                 println!("write");
-                sendCell.send(cellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Output});
+                send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Output});
             },
 
             //FIX THIS ------------------------------------------------------------------------------------------------------------------------------//
@@ -172,8 +172,10 @@ fn run(instructions: &Vec<Instruction>, tape: &mut Vec<u8>, data_pointer: &mut u
             },
             //---------------------------------------------------------------------------------------------------------------------------------------//
             Instruction::Loop(nested_instructions) => {
+                println!("entered loop");
                 while tape[*data_pointer] != 0 {
-                    run(&nested_instructions, tape, data_pointer, sendOut.clone(), sendCell.clone())
+                    println!("looping");
+                    run(&nested_instructions, tape, data_pointer, send_cell.clone())
                 }
             }
         }
@@ -189,12 +191,12 @@ fn main() {
     let builder = gtk::Builder::from_string(glade_src);
     
     let window: gtk::Window = builder.get_object("window").unwrap();
-    let mut start_button: gtk::Button= builder.get_object("btnStart").unwrap();
-    let mut pause_button: gtk::Button = builder.get_object("btnPause").unwrap();
-    let mut reset_button: gtk::Button = builder.get_object("btnReset").unwrap();
-    let mut speed_slider: gtk::Scale = builder.get_object("sliderSpeed").unwrap();
-    let mut input: gtk::TextView = builder.get_object("txtInput").unwrap();
-    let mut output: gtk::TextView = builder.get_object("txtOutput").unwrap();
+    let start_button: gtk::Button= builder.get_object("btnStart").unwrap();
+    let pause_button: gtk::Button = builder.get_object("btnPause").unwrap();
+    let reset_button: gtk::Button = builder.get_object("btnReset").unwrap();
+    let speed_slider: gtk::Scale = builder.get_object("sliderSpeed").unwrap();
+    let input: gtk::TextView = builder.get_object("txtInput").unwrap();
+    let output: gtk::TextView = builder.get_object("txtOutput").unwrap();
     let mut tape_lbls: Vec<gtk::Label> = vec![gtk::Label::new(None); 32];
     let mut marker_lbls: Vec<gtk::Label> = vec![gtk::Label::new(None); 32];
     for i in 0..32 {
@@ -213,26 +215,25 @@ fn main() {
             marker_lbls[i].set_text("");
         }
 
-        let mut buf: gtk::TextBuffer = output.get_buffer().unwrap();
+        let buf: gtk::TextBuffer = output.get_buffer().unwrap();
         buf.set_text("");
         output.set_buffer(Some(&buf));
-        let sourceBuffer = input.get_buffer().unwrap();
-        let source = sourceBuffer.get_text(&sourceBuffer.get_start_iter(), &sourceBuffer.get_end_iter(), false);
+        let source_buffer = input.get_buffer().unwrap();
+        let source = source_buffer.get_text(&source_buffer.get_start_iter(), &source_buffer.get_end_iter(), false);
         let opcodes = lex(String::from(source.as_ref().unwrap().as_str()));
         let program = parse(opcodes);
         let mut tape: Vec<u8> = vec![0; 32];
         let mut data_pointer = 0;
 
-        let (sendOut, recieveOut) = mpsc::channel();
-        let (sendCell, recieveCell) = mpsc::channel();
+        let (send_cell, recieve_cell) = mpsc::channel();
 
         let interpreter = thread::spawn(move || {
 
-            run(&program, &mut tape, &mut data_pointer, sendOut, sendCell);
+            run(&program, &mut tape, &mut data_pointer, send_cell);
             
         });
         loop { 
-            let received = recieveCell.recv();
+            let received = recieve_cell.recv();
             // let receivedOut = recieveOut.recv();
             // match receivedOut{
             //     Ok(_) =>{
@@ -250,9 +251,9 @@ fn main() {
             //     }
             // }
             match received.clone(){
-                Ok(cellChange{index: _, content: _, action: Action::Output}) => {
-                    let mut tmp = buf.get_text(&buf.get_start_iter(), &buf.get_end_iter(), false);
-                    let mut output = String::from(tmp.unwrap().as_str());
+                Ok(CellChange{index: _, content: _, action: Action::Output}) => {
+                    println!("{:?}", received);
+                    let mut output = String::from(buf.get_text(&buf.get_start_iter(), &buf.get_end_iter(), false).unwrap().as_str());
                     output.push(received.unwrap().content as char);
                     buf.set_text(output.as_str());
                     while gtk::events_pending(){
@@ -260,12 +261,13 @@ fn main() {
                     }
                 }
                 Ok(_) =>{
+                    println!("{:?}", received);
                     for i in 0..32 {
                         marker_lbls[i].set_text("");
                     }
                     marker_lbls[received.clone().unwrap().index].set_text("#");
                     let tmp = received.clone().unwrap().content.to_string();
-                    tape_lbls[received.unwrap().index].set_text(&tmp[..]);
+                    tape_lbls[received.clone().unwrap().index].set_text(&tmp[..]);
                     while gtk::events_pending(){
                         gtk::main_iteration();
                     }

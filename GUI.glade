@@ -156,7 +156,7 @@
                 <property name="max_width_chars">3</property>
               </object>
               <packing>
-                <property name="left_attach">6</property>
+                <property name="left_attach">1</property>
                 <property name="top_attach">0</property>
               </packing>
             </child>
@@ -170,7 +170,7 @@
                 <property name="max_width_chars">3</property>
               </object>
               <packing>
-                <property name="left_attach">1</property>
+                <property name="left_attach">2</property>
                 <property name="top_attach">0</property>
               </packing>
             </child>
@@ -184,7 +184,7 @@
                 <property name="max_width_chars">3</property>
               </object>
               <packing>
-                <property name="left_attach">2</property>
+                <property name="left_attach">3</property>
                 <property name="top_attach">0</property>
               </packing>
             </child>
@@ -198,7 +198,7 @@
                 <property name="max_width_chars">3</property>
               </object>
               <packing>
-                <property name="left_attach">3</property>
+                <property name="left_attach">4</property>
                 <property name="top_attach">0</property>
               </packing>
             </child>
@@ -212,7 +212,7 @@
                 <property name="max_width_chars">3</property>
               </object>
               <packing>
-                <property name="left_attach">4</property>
+                <property name="left_attach">5</property>
                 <property name="top_attach">0</property>
               </packing>
             </child>
@@ -226,7 +226,7 @@
                 <property name="max_width_chars">3</property>
               </object>
               <packing>
-                <property name="left_attach">5</property>
+                <property name="left_attach">6</property>
                 <property name="top_attach">0</property>
               </packing>
             </child>
