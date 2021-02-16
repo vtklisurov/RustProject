@@ -1,6 +1,7 @@
 extern crate gtk;
 extern crate gio;
 
+
 use gtk::prelude::*;
 use gio::prelude::*;
 
@@ -8,6 +9,7 @@ use gtk::{Application, ApplicationWindow, Button};
 
 use std::env;
 use std::io::Read;
+use std::sync::*;
 use std::{thread, time};
 
 /// Opcodes determined by the lexer
@@ -116,11 +118,9 @@ fn parse(opcodes: Vec<OpCode>) -> Vec<Instruction> {
 }
 
 /// Executes a program that was previously parsed
-fn run(instructions: &Vec<Instruction>, tape: &mut Vec<u8>, data_pointer: &mut usize, text_buffer: &mut gtk::TextBuffer) {
+fn run(instructions: &Vec<Instruction>, tape: &mut Vec<u8>, data_pointer: &mut usize, tx: std::sync::mpsc::Sender<char>) {
     for instr in instructions {
-        while gtk::events_pending(){
-            gtk::main_iteration();
-        }
+
         match instr {
             Instruction::IncrementPointer => *data_pointer += 1,
             Instruction::DecrementPointer => *data_pointer -= 1,
@@ -128,10 +128,11 @@ fn run(instructions: &Vec<Instruction>, tape: &mut Vec<u8>, data_pointer: &mut u
             Instruction::Decrement => tape[*data_pointer] -= 1,
             Instruction::Write => {
                 thread::sleep(time::Duration::from_millis(100));
-                let mut tmp = text_buffer.get_text(&text_buffer.get_start_iter(), &text_buffer.get_end_iter(), false);
-                let mut output = String::from(tmp.unwrap().as_str());
-                output.push(tape[*data_pointer] as char);
-                text_buffer.set_text(output.as_str());
+                tx.send(tape[*data_pointer] as char);
+                // let mut tmp = text_buffer.get_text(&text_buffer.get_start_iter(), &text_buffer.get_end_iter(), false);
+                // let mut output = String::from(tmp.unwrap().as_str());
+                // output.push(tape[*data_pointer] as char);
+                // text_buffer.set_text(output.as_str());
             },
 
             //FIX THIS ------------------------------------------------------------------------------------------------------------------------------//
@@ -144,7 +145,7 @@ fn run(instructions: &Vec<Instruction>, tape: &mut Vec<u8>, data_pointer: &mut u
             //---------------------------------------------------------------------------------------------------------------------------------------//
             Instruction::Loop(nested_instructions) => {
                 while tape[*data_pointer] != 0 {
-                    run(&nested_instructions, tape, data_pointer, text_buffer)
+                    run(&nested_instructions, tape, data_pointer, tx.clone())
                 }
             }
         }
@@ -177,7 +178,6 @@ fn main() {
 
     window.show_all();
 
-
     
     start_button.connect_clicked(move |_| {
         let mut buf: gtk::TextBuffer = output.get_buffer().unwrap();
@@ -189,11 +189,39 @@ fn main() {
         let mut tape: Vec<u8> = vec![0; 32];
         let mut data_pointer = 0;
 
+        let (tx, rx) = mpsc::channel();
 
-        run(&program, &mut tape, &mut data_pointer, &mut buf);
+        let interpreter = thread::spawn(move || {
+
+            run(&program, &mut tape, &mut data_pointer, tx);
+            
+        });
+        loop { 
+            let received = rx.recv();
+            match received{
+                Ok(_) =>{
+                    let mut tmp = buf.get_text(&buf.get_start_iter(), &buf.get_end_iter(), false);
+                    let mut output = String::from(tmp.unwrap().as_str());
+                    output.push(received.unwrap());
+                    buf.set_text(output.as_str());
+                    while gtk::events_pending(){
+                        gtk::main_iteration();
+                    }
+                },
+                Err(_) => {
+                    println!("{:?}", received);
+                    break;
+                }
+            }       
+        }
+    });
+
+    pause_button.connect_clicked(move |_| {
+
         
 
     });
+
 
 
     gtk::main();
