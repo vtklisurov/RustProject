@@ -12,6 +12,7 @@ use std::env;
 use std::io::Read;
 use std::sync::mpsc;
 use std::{thread, time};
+use std::process;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -46,7 +47,8 @@ enum Instruction {
 enum Action {
     Input,
     Output,
-    Tape
+    Tape,
+    Paused
 }
 
 #[derive(Debug)]
@@ -66,21 +68,23 @@ struct InstructionIndex{
 }
 
 static RESET: AtomicBool = AtomicBool::new(false);
+static PAUSE: AtomicBool = AtomicBool::new(false);
 
-/// Lexer turns the source code into a sequence of opcodes
-fn lex(source: String) -> Vec<OpCode> {
+//turns the source code into opcodes
+fn lex(source: String) -> Vec<(OpCode, usize)> {
     let mut operations = Vec::new();
+    let mut cnt = 0;
 
     for symbol in source.chars() {
         let op = match symbol {
-            '>' => Some(OpCode::IncrementPointer),
-            '<' => Some(OpCode::DecrementPointer),
-            '+' => Some(OpCode::Increment),
-            '-' => Some(OpCode::Decrement),
-            '.' => Some(OpCode::Write),
-            ',' => Some(OpCode::Read),
-            '[' => Some(OpCode::LoopBegin),
-            ']' => Some(OpCode::LoopEnd),
+            '>' => Some((OpCode::IncrementPointer, cnt)),
+            '<' => Some((OpCode::DecrementPointer, cnt)),
+            '+' => Some((OpCode::Increment, cnt)),
+            '-' => Some((OpCode::Decrement, cnt)),
+            '.' => Some((OpCode::Write, cnt)),
+            ',' => Some((OpCode::Read, cnt)),
+            '[' => Some((OpCode::LoopBegin, cnt)),
+            ']' => Some((OpCode::LoopEnd, cnt)),
             _ => None
         };
 
@@ -89,12 +93,14 @@ fn lex(source: String) -> Vec<OpCode> {
             Some(op) => operations.push(op),
             None => ()
         }
+        cnt+=1;
     }
 
     operations
 }
 
-fn parse(opcodes: Vec<OpCode>, txt_index: &mut usize) -> Vec<InstructionIndex> {
+//turns the opcodes into instructions
+fn parse(opcodes: Vec<(OpCode, usize)>, txt_index: &mut usize) -> Vec<InstructionIndex> {
     let mut program: Vec<InstructionIndex> = Vec::new();
     let mut loop_stack = 0;
     let mut loop_start = 0;
@@ -102,38 +108,38 @@ fn parse(opcodes: Vec<OpCode>, txt_index: &mut usize) -> Vec<InstructionIndex> {
     for (i, op) in opcodes.iter().enumerate() {
         if loop_stack == 0 {
             let instr = match op {
-                OpCode::IncrementPointer => {
-                    *txt_index += 1;
-                    Some(InstructionIndex{index: *txt_index-1, code: Instruction::IncrementPointer})                 
+                (OpCode::IncrementPointer, txt_index) => {
+                    //*txt_index += 1;
+                    Some(InstructionIndex{index: *txt_index, code: Instruction::IncrementPointer})                 
                 },
-                OpCode::DecrementPointer => {
-                    *txt_index += 1;
-                    Some(InstructionIndex{index: *txt_index-1, code: Instruction::DecrementPointer})
+                (OpCode::DecrementPointer, txt_index)=> {
+                    //*txt_index += 1;
+                    Some(InstructionIndex{index: *txt_index, code: Instruction::DecrementPointer})
                 },
-                OpCode::Increment => {
-                    *txt_index += 1;
-                    Some(InstructionIndex{index: *txt_index-1, code: Instruction::Increment})
+                (OpCode::Increment, txt_index) => {
+                    //*txt_index += 1;
+                    Some(InstructionIndex{index: *txt_index, code: Instruction::Increment})
                 },
-                OpCode::Decrement => {
-                    *txt_index += 1;
-                    Some(InstructionIndex{index: *txt_index-1, code: Instruction::Decrement})
+                (OpCode::Decrement, txt_index) => {
+                    //*txt_index += 1;
+                    Some(InstructionIndex{index: *txt_index, code: Instruction::Decrement})
                 },
-                OpCode::Write => {
-                    *txt_index += 1;
-                    Some(InstructionIndex{index: *txt_index-1, code: Instruction::Write})
+                (OpCode::Write, txt_index) => {
+                    //*txt_index += 1;
+                    Some(InstructionIndex{index: *txt_index, code: Instruction::Write})
                 },
-                OpCode::Read => {
-                    *txt_index += 1;
-                    Some(InstructionIndex{index: *txt_index-1, code: Instruction::Read})
+                (OpCode::Read, txt_index) => {
+                    //*txt_index += 1;
+                    Some(InstructionIndex{index: *txt_index, code: Instruction::Read})
                 },
 
-                OpCode::LoopBegin => {
+                (OpCode::LoopBegin, _) => {
                     loop_start = i;
                     loop_stack += 1;
                     None
                 },
 
-                OpCode::LoopEnd => {
+                (OpCode::LoopEnd, _) => {
                     panic!("loop ending at #{} has no beginning", i)
                 },
             };
@@ -144,16 +150,16 @@ fn parse(opcodes: Vec<OpCode>, txt_index: &mut usize) -> Vec<InstructionIndex> {
             }
         } else {
             match op {
-                OpCode::LoopBegin => {
+                (OpCode::LoopBegin,_) => {
                     loop_stack += 1;
                 },
-                OpCode::LoopEnd => {
+                (OpCode::LoopEnd, mut txt_index) => {
                     loop_stack -= 1;
 
                     if loop_stack == 0 {
-                        *txt_index += 1;
-                        program.push(InstructionIndex{index: i, code: Instruction::Loop(parse(opcodes[loop_start+1..i].to_vec(), txt_index))});
-                        *txt_index += 1;
+                        //*txt_index += 1;
+                        program.push(InstructionIndex{index: i, code: Instruction::Loop(parse(opcodes[loop_start+1..i].to_vec(), &mut txt_index))});
+                        //*txt_index += 1;
                     }
                 },
                 _ => (),
@@ -168,49 +174,157 @@ fn parse(opcodes: Vec<OpCode>, txt_index: &mut usize) -> Vec<InstructionIndex> {
     program
 }
 
-/// Executes a program that was previously parsed
-fn run(instructions: &Vec<InstructionIndex>, tape: &mut Vec<u8>, data_pointer: &mut usize, send_cell: std::sync::mpsc::Sender<CellChange>, recieve_data: &std::sync::mpsc::Receiver<u8>) {
+//runs the parsed program
+fn run(instructions: &Vec<InstructionIndex>, tape: &mut Vec<u8>, data_pointer: &mut usize, send_cell: std::sync::mpsc::Sender<CellChange>, receive_data: &std::sync::mpsc::Receiver<u8>) {
     for instr in instructions {
         if RESET.load(Ordering::Relaxed) {
-            return;
+            break;
         }
-        thread::sleep(time::Duration::from_millis(10));
+
+        if PAUSE.load(Ordering::Relaxed) {
+            loop {
+                send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Paused, text_index: 0});
+                if PAUSE.load(Ordering::Relaxed) == false{
+                    break;
+                }
+                if RESET.load(Ordering::Relaxed) {
+                    return;
+                }
+            }
+        }
+        thread::sleep(time::Duration::from_millis(300));
         match instr {
+            
             InstructionIndex{index: i, code: Instruction::IncrementPointer} => {
-                
+                if RESET.load(Ordering::Relaxed) {
+                    break;
+                }
                 *data_pointer += 1;
                 send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Tape, text_index: *i});
+                if PAUSE.load(Ordering::Relaxed) {
+                    loop {
+                        send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Paused, text_index: *i});
+                        if PAUSE.load(Ordering::Relaxed) == false{
+                            break;
+                        }
+                        if RESET.load(Ordering::Relaxed) {
+                            return;
+                        }
+                    }
+                }
             },
             InstructionIndex{index: i, code: Instruction::DecrementPointer} => {
-                
+                if RESET.load(Ordering::Relaxed) {
+                    break;
+                }
                 *data_pointer -= 1;
                 send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Tape, text_index: *i});
+                if PAUSE.load(Ordering::Relaxed) {
+                    loop {
+                        send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Paused, text_index: *i});
+                        if PAUSE.load(Ordering::Relaxed) == false{
+                            break;
+                        }
+                        if RESET.load(Ordering::Relaxed) {
+                            return;
+                        }
+                    }
+                }
             },
             InstructionIndex{index: i, code: Instruction::Increment} => {
-                
+                if RESET.load(Ordering::Relaxed) {
+                    break;
+                }
                 tape[*data_pointer] += 1;
                 send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Tape, text_index: *i});
+                if PAUSE.load(Ordering::Relaxed) {
+                    loop {
+                        send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Paused, text_index: *i});
+                        if PAUSE.load(Ordering::Relaxed) == false{
+                            break;
+                        }
+                        if RESET.load(Ordering::Relaxed) {
+                            return;
+                        }
+                    }
+                }
             },
             InstructionIndex{index: i, code: Instruction::Decrement} => {
-                
+                if RESET.load(Ordering::Relaxed) {
+                    break;
+                }
                 tape[*data_pointer] -= 1;
                 send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Tape, text_index: *i});
+                if PAUSE.load(Ordering::Relaxed) {
+                    loop {
+                        send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Paused, text_index: *i});
+                        if PAUSE.load(Ordering::Relaxed) == false{
+                            break;
+                        }
+                        if RESET.load(Ordering::Relaxed) {
+                            return;
+                        }
+                    }
+                }
             },
             InstructionIndex{index: i, code: Instruction::Write} => {
-                
+                if RESET.load(Ordering::Relaxed) {
+                    break;
+                }
                 send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Output, text_index: *i});
+                if PAUSE.load(Ordering::Relaxed) {
+                    loop {
+                        send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Paused, text_index: *i});
+                        if PAUSE.load(Ordering::Relaxed) == false{
+                            break;
+                        }
+                        if RESET.load(Ordering::Relaxed) {
+                            return;
+                        }
+                    }
+                }
             },
 
-            InstructionIndex{index: i, code: Instruction::Read} => {                      
+            InstructionIndex{index: i, code: Instruction::Read} => {    
+                if RESET.load(Ordering::Relaxed) {
+                    break;
+                }                  
                 send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Input, text_index: *i});
-                let input = recieve_data.recv().unwrap();
+                if PAUSE.load(Ordering::Relaxed) {
+                    loop {
+                        send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Paused, text_index: *i});
+                        if PAUSE.load(Ordering::Relaxed) == false{
+                            break;
+                        }
+                        if RESET.load(Ordering::Relaxed) {
+                            return;
+                        }
+                    }
+                }
+                let input = receive_data.recv().unwrap();
                 tape[*data_pointer] = input;
             },
 
-
-            InstructionIndex{index: i, code: Instruction::Loop(nested_instructions)} => {
+            InstructionIndex{index: _, code: Instruction::Loop(nested_instructions)} => {
+                if RESET.load(Ordering::Relaxed) {
+                    break;
+                }
                 while tape[*data_pointer] != 0 {
-                    run(&nested_instructions, tape, data_pointer, send_cell.clone(), &recieve_data)
+                    run(&nested_instructions, tape, data_pointer, send_cell.clone(), &receive_data);
+                    if PAUSE.load(Ordering::Relaxed) {
+                        loop {
+                            send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Paused, text_index: 0});
+                            if PAUSE.load(Ordering::Relaxed) == false{
+                                break;
+                            }
+                            if RESET.load(Ordering::Relaxed) {
+                                return;
+                            }
+                        }
+                    }
+                    if RESET.load(Ordering::Relaxed) {
+                        break;
+                    }
                 }
             }
         }
@@ -218,9 +332,10 @@ fn run(instructions: &Vec<InstructionIndex>, tape: &mut Vec<u8>, data_pointer: &
 }
 
 //starts the parsing and visualizing
-fn start_parsing(tape_lbls: &Vec<gtk::Label>, marker_lbls: &Vec<gtk::Label>, input: &gtk::TextView, output: &gtk::TextView){
+fn start_parsing(tape_lbls: &Vec<gtk::Label>, marker_lbls: &Vec<gtk::Label>, input: &gtk::TextView, output: &gtk::TextView, pause_button: &gtk::Button){
 
     RESET.store(false, Ordering::Relaxed);
+    
 
     for i in 0..32 {
         tape_lbls[i].set_text("0");
@@ -243,16 +358,28 @@ fn start_parsing(tape_lbls: &Vec<gtk::Label>, marker_lbls: &Vec<gtk::Label>, inp
     let mut tape: Vec<u8> = vec![0; 32];
     let mut data_pointer = 0;
 
-    let (send_cell, recieve_cell) = mpsc::channel();
-    let (send_data, recieve_data) = mpsc::channel();
+    let (send_cell, receive_cell) = mpsc::channel();
+    let (send_data, receive_data) = mpsc::channel();
+
+
+    
 
     let interpreter = thread::spawn(move || {
+        println!("running thread");
+        if RESET.load(Ordering::Relaxed) {
+            println!("stopping");
 
-        run(&program, &mut tape, &mut data_pointer, send_cell, &recieve_data);
-        
+            //process::exit(1);
+            return;
+        }
+        run(&program, &mut tape, &mut data_pointer, send_cell, &receive_data);
+        println!("done running");
+        return;
     });
     loop { 
-        let received = recieve_cell.recv();
+        let received = receive_cell.recv();
+
+
 
         match received.clone(){
             Ok(CellChange{index: _, content: _, action: Action::Output, text_index: i}) => {
@@ -312,6 +439,24 @@ fn start_parsing(tape_lbls: &Vec<gtk::Label>, marker_lbls: &Vec<gtk::Label>, inp
                     gtk::main_iteration();
                 }
             },
+            Ok(_) =>{
+                println!("main thread: paused");
+
+                pause_button.connect_clicked(move |_|{
+        
+                    if PAUSE.load(Ordering::Relaxed) == false{
+                        PAUSE.store(true, Ordering::Relaxed);
+                    }
+                    else{
+                        PAUSE.store(false, Ordering::Relaxed);
+                    }
+            
+                });
+
+                while gtk::events_pending(){
+                    gtk::main_iteration();
+                }
+            },
             Err(_) => {
                 println!("{:?}", received);
                 break;
@@ -330,9 +475,6 @@ fn reset_app(tape_lbls: &Vec<gtk::Label>, marker_lbls: &Vec<gtk::Label>, input: 
         marker_lbls[i].set_text("");
     }
 
-    input.set_editable(true);
-    input.set_cursor_visible(true);
-
     let buf: gtk::TextBuffer = output.get_buffer().unwrap();
     let in_buf: gtk::TextBuffer = input.get_buffer().unwrap();
     
@@ -343,6 +485,14 @@ fn reset_app(tape_lbls: &Vec<gtk::Label>, marker_lbls: &Vec<gtk::Label>, input: 
         gtk::main_iteration();
     }
 }
+
+fn pause_app(){
+
+
+
+
+}
+
 
 
 fn main() {
@@ -373,32 +523,34 @@ fn main() {
 
     window.show_all();
 
-    
-    start_button.connect_clicked(move |but| {
+    let tape_lbls_copy = tape_lbls.clone();
+    let marker_lbls_copy = marker_lbls.clone();
+    let input_copy = input.clone();
+    let output_copy = output.clone();
 
+    let tape_lbls_copy_2 = tape_lbls.clone();
+    let marker_lbls_copy_2 = marker_lbls.clone();
+    let input_copy_2 = input.clone();
+    let output_copy_2 = output.clone();
+
+    start_button.connect_clicked(move |but| {
         but.set_sensitive(false);
-        start_parsing(&tape_lbls, &marker_lbls, &input, &output);
+        start_parsing(&tape_lbls_copy, &marker_lbls_copy, &input_copy, &output_copy, &pause_button);
         but.set_sensitive(true);
     });
 
-    // reset_button.connect_clicked(|_|{
+    reset_button.connect_clicked(move |_|{
+
+        input_copy_2.set_editable(true);
+        input_copy_2.set_cursor_visible(true);
         
-    //     reset_app(&tape_lbls, &marker_lbls, &input, &output)
+        reset_app(&tape_lbls_copy_2, &marker_lbls_copy_2, &input_copy_2, &output_copy_2);
 
-    // });
+    });
 
+
+    
 
     gtk::main();
 
-    // // Lex file into opcodes
-    // let opcodes = lex(source);
-
-    // // Parse opcodes into program
-    // let program = parse(opcodes);
-
-    // // Set up environment and run program
-    // let mut tape: Vec<u8> = vec![0; 1024];
-    // let mut data_pointer = 512;
-
-    // run(&program, &mut tape, &mut data_pointer);
 }
