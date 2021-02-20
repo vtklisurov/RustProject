@@ -1,11 +1,9 @@
 extern crate gtk;
 extern crate gio;
 
-
 use gtk::prelude::*;
 
 use gtk::{ButtonsType, DialogFlags, MessageType, MessageDialog, Window};
-
 
 use std::sync::mpsc;
 use std::{thread, time};
@@ -165,7 +163,6 @@ fn parse(opcodes: Vec<(OpCode, usize)>) -> Vec<InstructionIndex> {
 
     if loop_stack != 0 {
         program.push(InstructionIndex{index: loop_start, code: Instruction::Error(format!("Loop without ending at index {}", loop_start))});
-        //panic!("loop that starts at #{} has no matching ending!", loop_start);
     }
 
     program

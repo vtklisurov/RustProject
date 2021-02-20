@@ -9,6 +9,7 @@
     <property name="step_increment">1</property>
     <property name="page_increment">10</property>
   </object>
+  <object class="GtkTextBuffer" id="textbuffer1"/>
   <object class="GtkWindow" id="window">
     <property name="can_focus">False</property>
     <signal name="destroy" handler="on_window_destroy" swapped="no"/>
@@ -19,7 +20,7 @@
       <object class="GtkFixed" id="fixed1">
         <property name="visible">True</property>
         <property name="can_focus">False</property>
-        <property name="margin_right">20</property>
+        <property name="margin_right">60</property>
         <property name="margin_bottom">20</property>
         <child>
           <object class="GtkButton" id="btnStart">
@@ -32,7 +33,7 @@
             <signal name="clicked" handler="on_btnStart_clicked" swapped="no"/>
           </object>
           <packing>
-            <property name="x">783</property>
+            <property name="x">743</property>
             <property name="y">93</property>
           </packing>
         </child>
@@ -48,7 +49,7 @@ Unpause</property>
             <signal name="clicked" handler="on_BtnPause_clicked" swapped="no"/>
           </object>
           <packing>
-            <property name="x">783</property>
+            <property name="x">743</property>
             <property name="y">184</property>
           </packing>
         </child>
@@ -60,7 +61,7 @@ Unpause</property>
             <property name="label" translatable="yes">Delay</property>
           </object>
           <packing>
-            <property name="x">783</property>
+            <property name="x">743</property>
             <property name="y">278</property>
           </packing>
         </child>
@@ -75,7 +76,7 @@ Unpause</property>
             <signal name="clicked" handler="on_btnReset_clicked" swapped="no"/>
           </object>
           <packing>
-            <property name="x">782</property>
+            <property name="x">743</property>
             <property name="y">530</property>
           </packing>
         </child>
@@ -90,7 +91,7 @@ Unpause</property>
             <property name="cursor_visible">False</property>
           </object>
           <packing>
-            <property name="x">116</property>
+            <property name="x">76</property>
             <property name="y">668</property>
           </packing>
         </child>
@@ -101,7 +102,7 @@ Unpause</property>
             <property name="label" translatable="yes">Output</property>
           </object>
           <packing>
-            <property name="x">116</property>
+            <property name="x">76</property>
             <property name="y">643</property>
           </packing>
         </child>
@@ -562,7 +563,7 @@ Unpause</property>
             </child>
           </object>
           <packing>
-            <property name="x">96</property>
+            <property name="x">56</property>
             <property name="y">50</property>
           </packing>
         </child>
@@ -991,7 +992,7 @@ Unpause</property>
             </child>
           </object>
           <packing>
-            <property name="x">96</property>
+            <property name="x">56</property>
             <property name="y">31</property>
           </packing>
         </child>
@@ -1009,7 +1010,7 @@ Unpause</property>
             <property name="draw_value">False</property>
           </object>
           <packing>
-            <property name="x">783</property>
+            <property name="x">743</property>
             <property name="y">294</property>
           </packing>
         </child>
@@ -1023,7 +1024,7 @@ Unpause</property>
             <property name="receives_default">True</property>
           </object>
           <packing>
-            <property name="x">783</property>
+            <property name="x">743</property>
             <property name="y">340</property>
           </packing>
         </child>
@@ -1046,12 +1047,11 @@ Unpause</property>
             </child>
           </object>
           <packing>
-            <property name="x">116</property>
+            <property name="x">76</property>
             <property name="y">93</property>
           </packing>
         </child>
       </object>
     </child>
   </object>
-  <object class="GtkTextBuffer" id="textbuffer1"/>
 </interface>
