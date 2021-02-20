@@ -13,7 +13,6 @@ use std::process;
 
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 
-/// Opcodes determined by the lexer
 #[derive(Debug)]
 #[derive(Clone)]
 enum OpCode {
@@ -36,7 +35,8 @@ enum Instruction {
     Decrement,
     Write,
     Read,
-    Loop(Vec<InstructionIndex>)
+    Loop(Vec<InstructionIndex>),
+    Error(String)
 }
 
 #[derive(Debug)]
@@ -45,6 +45,7 @@ enum Action {
     Input,
     Output,
     Tape,
+    Error(String)
 }
 
 #[derive(Debug)]
@@ -85,7 +86,6 @@ fn lex(source: String) -> Vec<(OpCode, usize)> {
             _ => None
         };
 
-        // all other characters are comments
         match op {
             Some(op) => operations.push(op),
             None => ()
@@ -97,7 +97,7 @@ fn lex(source: String) -> Vec<(OpCode, usize)> {
 }
 
 //turns the opcodes into instructions
-fn parse(opcodes: Vec<(OpCode, usize)>, _: &mut usize) -> Vec<InstructionIndex> {
+fn parse(opcodes: Vec<(OpCode, usize)>) -> Vec<InstructionIndex> {
     let mut program: Vec<InstructionIndex> = Vec::new();
     let mut loop_stack = 0;
     let mut loop_start = 0;
@@ -136,8 +136,8 @@ fn parse(opcodes: Vec<(OpCode, usize)>, _: &mut usize) -> Vec<InstructionIndex> 
                     None
                 },
 
-                (OpCode::LoopEnd, _) => {
-                    panic!("loop ending at #{} has no beginning", i)
+                (OpCode::LoopEnd, txt_index) => {
+                    Some(InstructionIndex{index: *txt_index, code: Instruction::Error(format!("Loop without beginning at index {}", txt_index))})
                 },
             };
 
@@ -151,11 +151,11 @@ fn parse(opcodes: Vec<(OpCode, usize)>, _: &mut usize) -> Vec<InstructionIndex> 
                 (OpCode::LoopBegin,_) => {
                     loop_stack += 1;
                 },
-                (OpCode::LoopEnd, mut txt_index) => {
+                (OpCode::LoopEnd, _) => {
                     loop_stack -= 1;
 
                     if loop_stack == 0 {
-                        program.push(InstructionIndex{index: i, code: Instruction::Loop(parse(opcodes[loop_start+1..i].to_vec(), &mut txt_index))});
+                        program.push(InstructionIndex{index: i, code: Instruction::Loop(parse(opcodes[loop_start+1..i].to_vec()))});
                     }
                 },
                 _ => (),
@@ -164,14 +164,15 @@ fn parse(opcodes: Vec<(OpCode, usize)>, _: &mut usize) -> Vec<InstructionIndex> 
     }
 
     if loop_stack != 0 {
-        panic!("loop that starts at #{} has no matching ending!", loop_start);
+        program.push(InstructionIndex{index: loop_start, code: Instruction::Error(format!("Loop without ending at index {}", loop_start))});
+        //panic!("loop that starts at #{} has no matching ending!", loop_start);
     }
 
     program
 }
 
 //runs the parsed program
-fn run(instructions: &Vec<InstructionIndex>, tape: &mut Vec<u8>, data_pointer: &mut usize, send_cell: std::sync::mpsc::Sender<CellChange>, receive_data: &std::sync::mpsc::Receiver<u8>) {
+fn run(instructions: &Vec<InstructionIndex>, tape: &mut Vec<u8>, data_pointer: &mut usize, send_cell: std::sync::mpsc::Sender<CellChange>, receive_data: &std::sync::mpsc::Receiver<i16>) {
     for instr in instructions {
         if RESET.load(Ordering::Relaxed) {
             break;
@@ -194,8 +195,17 @@ fn run(instructions: &Vec<InstructionIndex>, tape: &mut Vec<u8>, data_pointer: &
                 if RESET.load(Ordering::Relaxed) {
                     break;
                 }
-                *data_pointer += 1;
-                send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Tape, text_index: *i}).unwrap();
+
+                if *data_pointer < 31 {
+                    *data_pointer += 1;
+                    send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Tape, text_index: *i}).unwrap();
+                } 
+                else {
+                    send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Error(String::from(format!("Data pointer out of bounds at index {}", *i))), text_index: *i}).unwrap();
+                    RESET.store(true, Ordering::Relaxed);
+                    break;
+                }
+
                 if PAUSE.load(Ordering::Relaxed) {
                     loop {
                         if PAUSE.load(Ordering::Relaxed) == false{
@@ -212,8 +222,17 @@ fn run(instructions: &Vec<InstructionIndex>, tape: &mut Vec<u8>, data_pointer: &
                 if RESET.load(Ordering::Relaxed) {
                     break;
                 }
-                *data_pointer -= 1;
-                send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Tape, text_index: *i}).unwrap();
+
+                if *data_pointer >0 {
+                    *data_pointer -= 1;
+                    send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Tape, text_index: *i}).unwrap();
+                }
+                else {
+                    send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Error(String::from(format!("Data pointer out of bounds at index {}", *i))), text_index: *i}).unwrap();
+                    RESET.store(true, Ordering::Relaxed);
+                    break;
+                }
+
                 if PAUSE.load(Ordering::Relaxed) {
                     loop {
                         if PAUSE.load(Ordering::Relaxed) == false{
@@ -230,8 +249,16 @@ fn run(instructions: &Vec<InstructionIndex>, tape: &mut Vec<u8>, data_pointer: &
                 if RESET.load(Ordering::Relaxed) {
                     break;
                 }
-                tape[*data_pointer] += 1;
-                send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Tape, text_index: *i}).unwrap();
+
+                if tape[*data_pointer] < 255 {
+                    tape[*data_pointer] += 1;
+                    send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Tape, text_index: *i}).unwrap();
+                }
+                else {
+                    send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Error(String::from(format!("Addition overflow at index {}", *i))), text_index: *i}).unwrap();
+                    RESET.store(true, Ordering::Relaxed);
+                    break;
+                }
                 if PAUSE.load(Ordering::Relaxed) {
                     loop {
                         if PAUSE.load(Ordering::Relaxed) == false{
@@ -248,8 +275,15 @@ fn run(instructions: &Vec<InstructionIndex>, tape: &mut Vec<u8>, data_pointer: &
                 if RESET.load(Ordering::Relaxed) {
                     break;
                 }
-                tape[*data_pointer] -= 1;
-                send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Tape, text_index: *i}).unwrap();
+                if tape[*data_pointer] > 0 {
+                    tape[*data_pointer] -= 1;
+                    send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Tape, text_index: *i}).unwrap();
+                }
+                else {
+                    send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Error(String::from(format!("Subtraction underflow at index {}", *i))), text_index: *i}).unwrap();
+                    RESET.store(true, Ordering::Relaxed);
+                    break;
+                }
                 if PAUSE.load(Ordering::Relaxed) {
                     loop {
                         if PAUSE.load(Ordering::Relaxed) == false{
@@ -295,7 +329,14 @@ fn run(instructions: &Vec<InstructionIndex>, tape: &mut Vec<u8>, data_pointer: &
                     }
                 }
                 let input = receive_data.recv().unwrap();
-                tape[*data_pointer] = input;
+                if input != -1 {
+                    tape[*data_pointer] = input as u8;
+                } 
+                else {
+                    send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Error(String::from(format!("invalid input at index {}", *i))), text_index: *i}).unwrap();
+                    RESET.store(true, Ordering::Relaxed);
+                    break;
+                }
             },
 
             InstructionIndex{index: _, code: Instruction::Loop(nested_instructions)} => {
@@ -318,17 +359,22 @@ fn run(instructions: &Vec<InstructionIndex>, tape: &mut Vec<u8>, data_pointer: &
                         break;
                     }
                 }
+            },
+
+            InstructionIndex{index: i, code: Instruction::Error(e)} => {    
+                send_cell.send(CellChange{index: *data_pointer, content: tape[*data_pointer], action: Action::Error(e.clone()), text_index: *i}).unwrap();
+                RESET.store(true, Ordering::Relaxed);
+                break;
             }
         }
     }
 }
 
-//starts the parsing and visualizing
+//does the parsing and visualizing
 fn start_parsing(tape_lbls: &Vec<gtk::Label>, marker_lbls: &Vec<gtk::Label>, input: &gtk::TextView, output: &gtk::TextView, speed_slider: &gtk::Scale){
 
     RESET.store(false, Ordering::Relaxed);
     
-
     for i in 0..32 {
         tape_lbls[i].set_text("0");
         marker_lbls[i].set_text("");
@@ -337,16 +383,16 @@ fn start_parsing(tape_lbls: &Vec<gtk::Label>, marker_lbls: &Vec<gtk::Label>, inp
     input.set_editable(false);
     input.set_cursor_visible(false);
 
-    let mut txt_index:usize = 0;
-
     let buf: gtk::TextBuffer = output.get_buffer().unwrap();
     let in_buf: gtk::TextBuffer = input.get_buffer().unwrap();
     buf.set_text("");
     output.set_buffer(Some(&buf));
     let source_buffer = input.get_buffer().unwrap();
     let source = source_buffer.get_text(&source_buffer.get_start_iter(), &source_buffer.get_end_iter(), false);
+
     let opcodes = lex(String::from(source.as_ref().unwrap().as_str()));
-    let program = parse(opcodes, &mut txt_index);
+    let program = parse(opcodes);
+
     let mut tape: Vec<u8> = vec![0; 32];
     let mut data_pointer = 0;
 
@@ -407,7 +453,6 @@ fn start_parsing(tape_lbls: &Vec<gtk::Label>, marker_lbls: &Vec<gtk::Label>, inp
 
                 let dialog_window = MessageDialog::new(None::<&Window>, DialogFlags::empty(), MessageType::Info, ButtonsType::Ok, "Input:");
 
-
                 let dialog_box = dialog_window.get_content_area();
                 let user_entry = gtk::Entry::new();
 
@@ -419,18 +464,44 @@ fn start_parsing(tape_lbls: &Vec<gtk::Label>, marker_lbls: &Vec<gtk::Label>, inp
                 let response = dialog_window.run();
                 let text = user_entry.get_text();
 
+                let number = text.parse::<i64>();
+
+                match number{
+                    Ok(_) => {
+                        if number.clone().unwrap() > 255 || number.clone().unwrap() < 0{
+                            send_data.send(-1).unwrap();
+                        }
+                        else {
+                            send_data.send(number.unwrap() as i16).unwrap();
+                        }
+                    },
+                    Err(_) => {
+                        if (response == gtk::ResponseType::Ok)  && (text.len() == 1){
+                            send_data.send(text.as_bytes()[0] as i16).unwrap();
+                        }
+                        else {
+                            send_data.send(-1).unwrap();
+                        }
+                    }
+                }
+
                 dialog_window.close();
                 
-                if (response == gtk::ResponseType::Ok) && (text != "") {
-                    send_data.send(text.as_bytes()[0]).unwrap();
+                while gtk::events_pending(){
+                    gtk::main_iteration();
                 }
-                else {
-                    send_data.send(0).unwrap();
-                }
+            },
+
+            Ok(CellChange{index: _, content: _, action: Action::Error(e), text_index: _}) => {
+
+                let output_txt = format!("Error: {}", e);
+
+                buf.set_text(output_txt.as_str());
 
                 while gtk::events_pending(){
                     gtk::main_iteration();
                 }
+
             },
 
             Err(mpsc::TryRecvError::Empty) => {
@@ -449,7 +520,6 @@ fn start_parsing(tape_lbls: &Vec<gtk::Label>, marker_lbls: &Vec<gtk::Label>, inp
     input.set_editable(true);
     input.set_cursor_visible(true);
 }
-
 
 fn reset_app(tape_lbls: &Vec<gtk::Label>, marker_lbls: &Vec<gtk::Label>, input: &gtk::TextView, output: &gtk::TextView){
 
@@ -470,6 +540,237 @@ fn reset_app(tape_lbls: &Vec<gtk::Label>, marker_lbls: &Vec<gtk::Label>, input: 
         gtk::main_iteration();
     }
 }
+
+//----------------------------------------------------------------TESTS START HERE-------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normal_parse() {
+        if gtk::init().is_err() {
+            println!("Failed to initialize GTK.");
+            return;
+        }
+        let glade_src = include_str!("../GUI.glade");
+        let builder = gtk::Builder::from_string(glade_src);
+        let speed_slider: gtk::Scale = builder.get_object("sliderSpeed").unwrap();
+        let input: gtk::TextView = builder.get_object("txtInput").unwrap();
+        let output: gtk::TextView = builder.get_object("txtOutput").unwrap();
+        let tape_lbls: Vec<gtk::Label> = vec![gtk::Label::new(None); 32];
+        let marker_lbls: Vec<gtk::Label> = vec![gtk::Label::new(None); 32];
+
+        let source_buffer = input.get_buffer().unwrap();
+        source_buffer.set_text("++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++.");
+
+        speed_slider.set_value(0.0);
+        
+        start_parsing(&tape_lbls, &marker_lbls, &input, &output, &speed_slider);
+        
+        let out_buffer = output.get_buffer().unwrap();
+
+        assert_eq!(String::from(out_buffer.get_text(&out_buffer.get_start_iter(), &out_buffer.get_end_iter(), false).unwrap()), "Hello World!\n")
+    }
+
+    #[test]
+    fn loop_no_start() {
+        if gtk::init().is_err() {
+            println!("Failed to initialize GTK.");
+            return;
+        }
+        let glade_src = include_str!("../GUI.glade");
+        let builder = gtk::Builder::from_string(glade_src);
+        let speed_slider: gtk::Scale = builder.get_object("sliderSpeed").unwrap();
+        let input: gtk::TextView = builder.get_object("txtInput").unwrap();
+        let output: gtk::TextView = builder.get_object("txtOutput").unwrap();
+        let tape_lbls: Vec<gtk::Label> = vec![gtk::Label::new(None); 32];
+        let marker_lbls: Vec<gtk::Label> = vec![gtk::Label::new(None); 32];
+
+        let source_buffer = input.get_buffer().unwrap();
+        source_buffer.set_text("++++++++>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++.");
+
+        speed_slider.set_value(0.0);
+        
+        start_parsing(&tape_lbls, &marker_lbls, &input, &output, &speed_slider);
+        
+        let out_buffer = output.get_buffer().unwrap();
+
+        assert_eq!(String::from(out_buffer.get_text(&out_buffer.get_start_iter(), &out_buffer.get_end_iter(), false).unwrap()), "Error: Loop without beginning at index 47")
+    }
+
+    #[test]
+    fn loop_no_end() {
+        if gtk::init().is_err() {
+            println!("Failed to initialize GTK.");
+            return;
+        }
+        let glade_src = include_str!("../GUI.glade");
+        let builder = gtk::Builder::from_string(glade_src);
+        let speed_slider: gtk::Scale = builder.get_object("sliderSpeed").unwrap();
+        let input: gtk::TextView = builder.get_object("txtInput").unwrap();
+        let output: gtk::TextView = builder.get_object("txtOutput").unwrap();
+        let tape_lbls: Vec<gtk::Label> = vec![gtk::Label::new(None); 32];
+        let marker_lbls: Vec<gtk::Label> = vec![gtk::Label::new(None); 32];
+
+        let source_buffer = input.get_buffer().unwrap();
+        source_buffer.set_text("++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<->>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++.");
+
+        speed_slider.set_value(0.0);
+        
+        start_parsing(&tape_lbls, &marker_lbls, &input, &output, &speed_slider);
+        
+        let out_buffer = output.get_buffer().unwrap();
+
+        assert_eq!(String::from(out_buffer.get_text(&out_buffer.get_start_iter(), &out_buffer.get_end_iter(), false).unwrap()), "Error: Loop without ending at index 8")
+    }
+
+    #[test]
+    fn subtraction_underflow() {
+        if gtk::init().is_err() {
+            println!("Failed to initialize GTK.");
+            return;
+        }
+        let glade_src = include_str!("../GUI.glade");
+        let builder = gtk::Builder::from_string(glade_src);
+        let speed_slider: gtk::Scale = builder.get_object("sliderSpeed").unwrap();
+        let input: gtk::TextView = builder.get_object("txtInput").unwrap();
+        let output: gtk::TextView = builder.get_object("txtOutput").unwrap();
+        let tape_lbls: Vec<gtk::Label> = vec![gtk::Label::new(None); 32];
+        let marker_lbls: Vec<gtk::Label> = vec![gtk::Label::new(None); 32];
+
+        let source_buffer = input.get_buffer().unwrap();
+        source_buffer.set_text("-");
+
+        speed_slider.set_value(0.0);
+        
+        start_parsing(&tape_lbls, &marker_lbls, &input, &output, &speed_slider);
+        
+        let out_buffer = output.get_buffer().unwrap();
+
+        assert_eq!(String::from(out_buffer.get_text(&out_buffer.get_start_iter(), &out_buffer.get_end_iter(), false).unwrap()), "Error: Subtraction underflow at index 0")
+    }
+
+    #[test]
+    fn addition_overflow() {
+        if gtk::init().is_err() {
+            println!("Failed to initialize GTK.");
+            return;
+        }
+        let glade_src = include_str!("../GUI.glade");
+        let builder = gtk::Builder::from_string(glade_src);
+        let speed_slider: gtk::Scale = builder.get_object("sliderSpeed").unwrap();
+        let input: gtk::TextView = builder.get_object("txtInput").unwrap();
+        let output: gtk::TextView = builder.get_object("txtOutput").unwrap();
+        let tape_lbls: Vec<gtk::Label> = vec![gtk::Label::new(None); 32];
+        let marker_lbls: Vec<gtk::Label> = vec![gtk::Label::new(None); 32];
+
+        let source_buffer = input.get_buffer().unwrap();
+        source_buffer.set_text("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++");
+
+        speed_slider.set_value(0.0);
+        
+        start_parsing(&tape_lbls, &marker_lbls, &input, &output, &speed_slider);
+        
+        let out_buffer = output.get_buffer().unwrap();
+
+        assert_eq!(String::from(out_buffer.get_text(&out_buffer.get_start_iter(), &out_buffer.get_end_iter(), false).unwrap()), "Error: Addition overflow at index 255")
+    }
+
+    #[test]
+    fn pointer_out_of_bounds_lower() {
+        if gtk::init().is_err() {
+            println!("Failed to initialize GTK.");
+            return;
+        }
+        let glade_src = include_str!("../GUI.glade");
+        let builder = gtk::Builder::from_string(glade_src);
+        let speed_slider: gtk::Scale = builder.get_object("sliderSpeed").unwrap();
+        let input: gtk::TextView = builder.get_object("txtInput").unwrap();
+        let output: gtk::TextView = builder.get_object("txtOutput").unwrap();
+        let tape_lbls: Vec<gtk::Label> = vec![gtk::Label::new(None); 32];
+        let marker_lbls: Vec<gtk::Label> = vec![gtk::Label::new(None); 32];
+
+        let source_buffer = input.get_buffer().unwrap();
+        source_buffer.set_text("<");
+
+        speed_slider.set_value(0.0);
+        
+        start_parsing(&tape_lbls, &marker_lbls, &input, &output, &speed_slider);
+        
+        let out_buffer = output.get_buffer().unwrap();
+
+        assert_eq!(String::from(out_buffer.get_text(&out_buffer.get_start_iter(), &out_buffer.get_end_iter(), false).unwrap()), "Error: Data pointer out of bounds at index 0")
+    }
+
+    #[test]
+    fn pointer_out_of_bounds_upper() {
+        if gtk::init().is_err() {
+            println!("Failed to initialize GTK.");
+            return;
+        }
+        let glade_src = include_str!("../GUI.glade");
+        let builder = gtk::Builder::from_string(glade_src);
+        let speed_slider: gtk::Scale = builder.get_object("sliderSpeed").unwrap();
+        let input: gtk::TextView = builder.get_object("txtInput").unwrap();
+        let output: gtk::TextView = builder.get_object("txtOutput").unwrap();
+        let tape_lbls: Vec<gtk::Label> = vec![gtk::Label::new(None); 32];
+        let marker_lbls: Vec<gtk::Label> = vec![gtk::Label::new(None); 32];
+
+        let source_buffer = input.get_buffer().unwrap();
+        source_buffer.set_text(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>");
+
+        speed_slider.set_value(0.0);
+        
+        start_parsing(&tape_lbls, &marker_lbls, &input, &output, &speed_slider);
+        
+        let out_buffer = output.get_buffer().unwrap();
+
+        assert_eq!(String::from(out_buffer.get_text(&out_buffer.get_start_iter(), &out_buffer.get_end_iter(), false).unwrap()), "Error: Data pointer out of bounds at index 31")
+    }
+
+    #[test]
+    fn reset() {
+        if gtk::init().is_err() {
+            println!("Failed to initialize GTK.");
+            return;
+        }
+        let glade_src = include_str!("../GUI.glade");
+        let builder = gtk::Builder::from_string(glade_src);
+        let speed_slider: gtk::Scale = builder.get_object("sliderSpeed").unwrap();
+        let input: gtk::TextView = builder.get_object("txtInput").unwrap();
+        let output: gtk::TextView = builder.get_object("txtOutput").unwrap();
+        let tape_lbls: Vec<gtk::Label> = vec![gtk::Label::new(None); 32];
+        let marker_lbls: Vec<gtk::Label> = vec![gtk::Label::new(None); 32];
+
+        let tape_lbls_copy = tape_lbls.clone();
+        let marker_lbls_copy = marker_lbls.clone();
+        let input_copy = input.clone();
+        let output_copy = output.clone();    
+
+        let source_buffer = input.get_buffer().unwrap();
+        source_buffer.set_text("++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++.");
+
+        speed_slider.set_value(0.0);
+        
+        start_parsing(&tape_lbls, &marker_lbls, &input, &output, &speed_slider);
+        
+        let out_buffer = output.get_buffer().unwrap();
+        let in_buffer = input.get_buffer().unwrap();
+
+        assert_eq!(String::from(out_buffer.get_text(&out_buffer.get_start_iter(), &out_buffer.get_end_iter(), false).unwrap()), "Hello World!\n");
+
+        reset_app(&tape_lbls_copy, &marker_lbls_copy, &input_copy, &output_copy);
+
+        assert_eq!(String::from(out_buffer.get_text(&out_buffer.get_start_iter(), &out_buffer.get_end_iter(), false).unwrap()), "");
+        
+        assert_eq!(String::from(in_buffer.get_text(&in_buffer.get_start_iter(), &in_buffer.get_end_iter(), false).unwrap()), "");
+    }
+
+}
+
+//----------------------------------------------------------------TESTS END HERE-------------------------------------------------------------
+
 
 fn main() {
 
